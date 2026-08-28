@@ -1,0 +1,30 @@
+name: Bob Review Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  check-bob-review:
+    name: Verify Bob Review marker (require-bob-review PRs only)
+    if: contains(github.event.pull_request.labels.*.name, 'require-bob-review')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify IBM Bob Review marker exists for HEAD SHA
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          sha="$HEAD_SHA"
+          if [ -f ".bob-review/${sha}" ]; then
+            echo "Found IBM Bob Review marker for ${sha}."
+            exit 0
+          fi
+          echo "::error::No IBM Bob Review marker found for commit ${sha}."
+          exit 1
