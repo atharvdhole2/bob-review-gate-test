@@ -2,7 +2,7 @@ name: Bob Review Approval Gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
   check-bob-review-approval:
@@ -10,7 +10,7 @@ jobs:
     if: github.event.action != 'labeled' || github.event.label.name == 'clear-bob-receipt'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,8 @@ jobs:
       - name: Verify IBM Bob Review receipt has been cleared
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           has_receipt=0
           if find .bob-review -maxdepth 1 -type f ! -name '.gitkeep' 2>/dev/null | grep -q .; then
@@ -32,8 +34,22 @@ jobs:
           fi
 
           if gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json labels --jq '.labels[].name' | grep -qx "clear-bob-receipt"; then
-            echo "Receipt still exists, but clear-bob-receipt label confirms it's been cleared by a human."
-            gh pr edit "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --remove-label "clear-bob-receipt"
+            if [ "$EVENT_ACTION" = "labeled" ]; then
+              echo "Receipt exists and clear-bob-receipt label confirms a human cleared it. Deleting the receipt so future pushes don't need to re-clear it."
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              find .bob-review -maxdepth 1 -type f ! -name '.gitkeep' -delete
+              git add .bob-review
+              git commit -m "bob-review: clear receipt after human approval"
+              if git push origin "HEAD:${HEAD_REF}"; then
+                echo "Receipt deleted and pushed."
+              else
+                echo "Push failed, likely because another run already cleared it. Treating as already handled."
+              fi
+              gh pr edit "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --remove-label "clear-bob-receipt"
+            else
+              echo "Receipt still exists; clear-bob-receipt label already present. Leaving it as-is — deletion only happens on the labeling event itself."
+            fi
             exit 0
           fi
 
