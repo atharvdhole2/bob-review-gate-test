@@ -1,0 +1,62 @@
+name: Bob Review Gate v2 (combined)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  check-bob-review-v2:
+    name: Verify Bob Review marker and clean up (require-bob-review PRs only)
+    if: contains(github.event.pull_request.labels.*.name, 'require-bob-review')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify marker exists, then clean it up
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          sha="$HEAD_SHA"
+          found=0
+
+          if [ -f ".bob-review/${sha}" ]; then
+            found=1
+          fi
+
+          if [ "$found" -eq 0 ]; then
+            while IFS= read -r reviewed_sha; do
+              [ -z "$reviewed_sha" ] && continue
+              if git merge-base --is-ancestor "$reviewed_sha" HEAD 2>/dev/null; then
+                found=1
+                break
+              fi
+            done < <(git log --format=%s HEAD | grep -oE '^bob-review: mark [0-9a-f]{40} as reviewed' | grep -oE '[0-9a-f]{40}')
+          fi
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No IBM Bob Review marker found for commit ${sha}."
+            echo "Run the Bob Review VS Code extension locally before merging."
+            exit 1
+          fi
+
+          echo "Marker verified for ${sha}."
+
+          if find .bob-review -maxdepth 1 -type f ! -name '.gitkeep' 2>/dev/null | grep -q .; then
+            echo "Cleaning up marker file(s)."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            find .bob-review -maxdepth 1 -type f ! -name '.gitkeep' -delete
+            git add .bob-review
+            git commit -m "bob-review: clean up marker after verification"
+            if git push origin "HEAD:${HEAD_REF}"; then
+              echo "Marker deleted and pushed."
+            else
+              echo "Push failed, likely already cleaned up by another run."
+            fi
+          fi
